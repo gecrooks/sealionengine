@@ -11,6 +11,7 @@ from __future__ import absolute_import
 import sys
 import os
 from collections import namedtuple
+from collections import OrderedDict
 import argparse
 import random ; random.seed(42)
 import operator
@@ -37,11 +38,14 @@ from shapely.geometry import Polygon
 # tid -- train, train dotted, or test image id 
 # _nb -- abbreviation for number
 #
-# row, col, ch -- Images are indexed as (rows, columns, channels) with origin at top left. (skimage conventions)
+# row, col, ch -- Image arrays are indexed as (rows, columns, channels) with origin at top left. 
 #             Beware: Some libraries use (x,y) cartesian coordinates (e.g. cv2, matplotlib)
-# rr, cc -- lists of row and column coordinates (another skimage convention)
+# rr, cc -- lists of row and column coordinates 
 #
-# With contributions from @bitsofbits ...
+# By default, SeaLionData expects source data to be located in ../input, and saves processed data to ./outdir
+#
+#
+# With contributions from @bitsofbits, @authman, @mfab ...
 #
 
 
@@ -65,15 +69,16 @@ def package_versions():
 
 SOURCEDIR = os.path.join('..', 'input')
 
-OUTDIR = '.'    #FIXME
+OUTDIR = os.path.join('.', 'outdir')
 
-VERBOSITY = namedtuple('VERBOSITY', ['QUITE', 'NORMAL', 'VERBOSE', 'DEBUG'])(0,1,2,3)
+TILE_SIZE = 128   # Default tile size
+
+VERBOSITY = namedtuple('VERBOSITY', ['QUITE', 'NORMAL', 'VERBOSE', 'DEBUG'])(0, 1, 2, 3)
 
 SeaLionCoord = namedtuple('SeaLionCoord', ['tid', 'cls', 'row', 'col'])
 
 TileCoord = namedtuple('TileCoord', ['tid', 'row', 'row_stop', 'col', 'col_stop'])
 
-TILE_SIZE = 128
 
 class SeaLionData(object):
     
@@ -119,13 +124,15 @@ class SeaLionData(object):
             'test'       : os.path.join(sourcedir, 'Test', '{tid}.jpg'),
             # Data paths
             'coords'     : os.path.join(outdir, 'coords.csv'),  
-            'chunk'  : os.path.join(outdir, 'chunk_{tid}_{cls}_{row}_{col}_{size}.png'),
+            'chunk'      : os.path.join(outdir, 'chunk_{tid}_{cls}_{row}_{col}_{size}.png'),
             }
         
 
         self.bad_train_ids = (
             # From MismatchedTrainImages.txt
-            3, 7, 9, 21, 30, 34, 71, 81, 89, 97, 151, 184, 215, 234, 242, 
+            3, 
+            # 7,    # TrainDotted rotated 180 degrees. Apply custom fix in load_dotted_image()
+            9, 21, 30, 34, 71, 81, 89, 97, 151, 184, 215, 234, 242, 
             268, 290, 311, 331, 344, 380, 384, 406, 421, 469, 475, 490, 499, 
             507, 530, 531, 605, 607, 614, 621, 638, 644, 687, 712, 721, 767, 
             779, 781, 794, 800, 811, 839, 840, 869, 882, 901, 903, 905, 909, 
@@ -134,88 +141,142 @@ class SeaLionData(object):
             857,    # Many sea lions, but no dots on sea lions
             )
             
-        self._counts = None
+        # caches
+        self._tid_counts = None
+        self._tid_coords = None
 
         
     @property
-    def trainshort_ids(self):
-        return (0,1,2,4,5,6,8,10)  # Trainshort1
-        #return range(41,51)        # Trainshort2
+    def trainshort1_ids(self):
+        tids = range(0, 11)
+        tids = self._remove_bad_ids(tids)
+        return tids
+
+
+    @property
+    def trainshort2_ids(self):
+        tids = range(41,51)
+        tids = self._remove_bad_ids(tids)
+        return tids
+
         
     @property 
     def train_ids(self):
         """List of all valid train ids"""
         tids = range(0, self.train_nb)
-        tids = list(set(tids) - set(self.bad_train_ids) )  # Remove bad ids
+        tids = self._remove_bad_ids(tids)
+        return tids
+
+
+    def _remove_bad_ids(self, tids) :
+        tids = list(set(tids) - set(self.bad_train_ids) )
         tids.sort()
         return tids
-                    
+        
     @property 
     def test_ids(self):
         return range(0, self.test_nb)
+ 
     
     def path(self, name, **kwargs):
         """Return path to various source files"""
         path = self.paths[name].format(**kwargs)
         return path        
 
+
     @property
-    def counts(self) :
+    def tid_counts(self) :
         """A map from train_id to list of sea lion class counts"""
-        if self._counts is None :
-            counts = {}
+        if self._tid_counts is None :
+            tid_counts = OrderedDict()
             fn = self.path('counts')
             with open(fn) as f:
                 f.readline()
                 for line in f:
-                    tid_counts = list(map(int, line.split(',')))
-                    counts[tid_counts[0]] = tid_counts[1:]
-            self._counts = counts
-        return self._counts
+                    counts = list(map(int, line.split(',')))
+                    tid_counts[counts[0]] = counts[1:]
+            self._tid_counts = tid_counts
+        return self._tid_counts
 
-    def rmse(self, tid_counts) :
-        true_counts = self.counts
+
+    def count_coords(self, tid_coords) :
+        """Take a map from ids to coordinates, 
+        and return a map from ids to list of class counts"""
+        tid_counts = OrderedDict()
+        for tid, coords in tid_coords.items(): 
+            counts = [0]*self.cls_nb
+            for tid, cls, row, col in coords :
+                counts[cls] +=1
+            tid_counts[tid] = counts
+        return tid_counts
+
+
+    def rmse(self, tid_counts) :        
+        error = np.zeros(shape=[self.cls_nb])
+        err_nb = 0
         
-        error = np.zeros(shape=[5] )
+        self._progress('\ntid \t true_count     \t obs_count       \t difference', 
+            end='\n', verbosity=VERBOSITY.VERBOSE)
         
         for tid in tid_counts:
-            true_counts = self.counts[tid]
+            true_counts = self.tid_counts[tid]
             obs_counts = tid_counts[tid]
             diff = np.asarray(true_counts) - np.asarray(obs_counts)
+            err_nb += np.count_nonzero(diff)
             error += diff*diff
-        #print(error)
+            
+            if diff.any(): 
+                self._progress('{} \t{} \t{} \t{}'.format(tid, true_counts, obs_counts, diff),
+                    end='\n', verbosity=VERBOSITY.VERBOSE)
+
         error /= len(tid_counts)
-        rmse = np.sqrt(error).sum() / 5
-        return rmse 
+        rmse = np.sqrt(error).sum() / self.cls_nb
+        error_fraction = err_nb / (len(tid_counts)* self.cls_nb )
+         
+        return rmse, error_fraction
         
 
-    def load_train_image(self, train_id, border=0, mask=False):
-        """Return image as numpy array
+    def load_train_image(self, train_id, scale=1, border=0, mask=False):
+        """Return image as numpy array.
          
         border -- add a black border of this width around image
-        mask -- If true mask out masked areas from corresponding dotted image
+        mask -- If true copy masks from corresponding dotted image
         """
-        img = self._load_image('train', train_id, border)
+        img = self._load_image('train', train_id, scale, border)
         if mask :
             # The masked areas are not uniformly black, presumable due to 
             # jpeg compression artifacts
-            dot_img = self._load_image('dotted', train_id, border).astype(np.uint16).sum(axis=-1)
+            MASK_MAX = 40 
+            dot_img = self.load_dotted_image(train_id, scale, border).astype(np.uint16).sum(axis=-1)
             img = np.copy(img)
-            img[dot_img<40] = 0     #FIXME magic constant
+            img[dot_img<MASK_MAX] = 0 
         return img
    
 
-    def load_dotted_image(self, train_id, border=0):
-        return self._load_image('dotted', train_id, border)
+    def load_dotted_image(self, train_id, scale=1, border=0):
+        img = self._load_image('dotted', train_id, scale, border)
+        
+        if train_id == 7 :
+            # dotted image is rotated relative to train. Apply custom fix. (kudos: @authman)
+            img = np.rot90(img, 2, (0,1) )
+            
+        return img
  
  
-    def load_test_image(self, test_id, border=0):    
-        return self._load_image('test', test_id, border)
+    def load_test_image(self, test_id, scale=1, border=0):    
+        return self._load_image('test', test_id, scale, border)
 
 
-    def _load_image(self, itype, tid, border=0) :
+    def _load_image(self, itype, tid, scale=1, border=0) :
         fn = self.path(itype, tid=tid)
-        img = np.asarray(Image.open(fn))
+        img = Image.open(fn) 
+        
+        if scale != 1 :
+            width, height  = img.size # width x height for PIL
+            img = img.resize((width//scale, height//scale), Image.ANTIALIAS)
+        
+        img = np.asarray(img)
+        
         if border :
             height, width, channels = img.shape
             bimg = np.zeros( shape=(height+border*2, width+border*2, channels), dtype=np.uint8)
@@ -224,7 +285,7 @@ class SeaLionData(object):
         return img
     
 
-    def coords(self, train_id):
+    def find_coords(self, train_id):
         """Extract coordinates of dotted sealions and return list of SeaLionCoord objects"""
         
         # Empirical constants
@@ -239,9 +300,16 @@ class SeaLionData(object):
 
         img_diff = np.abs(src_img-dot_img)
         
+        #print(src_img.shape, dot_img.shape)
+        #Image.fromarray( src_img.astype(np.uint8) ).save('src_img.png')
+        #Image.fromarray( dot_img.astype(np.uint8) ).save('dot_img.png')
+        #sys.exit()
+        
         # Detect bad data. If train and dotted images are very different then somethings wrong.
         avg_diff = img_diff.sum() / (img_diff.shape[0] * img_diff.shape[1])
-        if avg_diff > MAX_AVG_DIFF: return None
+        if avg_diff > MAX_AVG_DIFF: 
+            self._progress('( Bad train image -- exceeds MAX_AVG_DIFF: {} )'.format(train_id))
+            return ()
         
         img_diff = np.max(img_diff, axis=-1)   
            
@@ -252,6 +320,8 @@ class SeaLionData(object):
         
         for cls, color in enumerate(self.cls_colors):
             # color search backported from @bitsofbits.
+            # Note that there are large red boxes and arrows in some training images (e.g. 912)
+            # The red of these lines (250,0,10) is sufficiently different from dot red that the lines get filtered out.
             color_array = np.array(color)[None, None, :]
             has_color = np.sqrt(np.sum(np.square(dot_img * (img_diff > 0)[:,:,None] - color_array), axis=-1)) < MAX_COLOR_DIFF 
             contours = skimage.measure.find_contours(has_color.astype(float), 0.5)
@@ -277,7 +347,7 @@ class SeaLionData(object):
                 counts[c.cls] +=1
             print()
             print('train_id','true_counts','counted_dots', 'difference', sep='\t')   
-            true_counts = self.counts[train_id]
+            true_counts = self.tid_counts[train_id]
             print(train_id, true_counts, counts, np.array(true_counts) - np.array(counts) , sep='\t' )
           
         if self.verbosity == VERBOSITY.DEBUG :
@@ -294,7 +364,7 @@ class SeaLionData(object):
         
 
     def save_coords(self, train_ids=None): 
-        if train_ids is None: train_ids = self.trainshort_ids #self.train_ids #FIXME
+        if train_ids is None: train_ids = self.train_ids 
         fn = self.path('coords')
         self._progress('Saving sea lion coordinates to {}'.format(fn))
         with open(fn, 'w') as csvfile:
@@ -302,17 +372,31 @@ class SeaLionData(object):
             writer.writerow( SeaLionCoord._fields )
             for tid in train_ids :
                 self._progress()
-                for coord in self.coords(tid):
+                for coord in self.find_coords(tid):
                     writer.writerow(coord)
         self._progress('done')
+
     
-    def load_coords(self):
-        fn = self.path('coords')
-        self._progress('Loading sea lion coordinates from {}'.format(fn))
-        with open(fn) as f:
-            f.readline()
-            return [SeaLionCoord(*[int(n) for n in line.split(',')]) for line in f]
-                           
+    @property
+    def tid_coords(self):
+        """Loads the coordinates saved by save_coords() and return a dictionary from tid to SeaLionCoords"""
+        if self._tid_coords is None :
+            fn = self.path('coords')
+            if not os.path.exists(fn) : self.save_coords()
+            
+            self._progress('( Loading sea lion coordinates from {}'.format(fn))
+            with open(fn) as f:
+                f.readline()
+                slc = [SeaLionCoord(*[int(n) for n in line.split(',')]) for line in f]
+            self._progress(')')  
+            tid_coords = OrderedDict()
+            for c in slc :
+                tid = c.tid
+                if tid not in tid_coords: tid_coords[tid] = []
+                tid_coords[tid].append(c)
+            self._tid_coords = tid_coords
+        return self._tid_coords     
+
             
     def save_sea_lions(self, coords=None, size=TILE_SIZE, dotted=False):
         """Save image chunks of given size centered on sea lion coordinates.
@@ -323,7 +407,7 @@ class SeaLionData(object):
         
         if coords is None : coords = self.load_coords()
         
-        last_tid = -1
+        last_tid = None
         
         for tid, cls, row, col in coords :
             if tid != last_tid:
@@ -352,52 +436,38 @@ class SeaLionData(object):
 
 # end SeaLionData
 
+# Utility routines
+def dump_namedtuple(filename, tuple_type, list_of_namedtuples) :
+    with open(filename, 'w') as csvfile:
+        writer =csv.writer(csvfile)
+        writer.writerow(tuple_type._fields )
+        for item in list_of_namedtuples :
+            writer.writerow(item)
 
 
-def main():
-    """SeaLionData command line interface"""
-    
-    parser = argparse.ArgumentParser(
-        description=__description__,
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-
-    parser.add_argument('--version', action='version', version=__version__)
-    parser.add_argument('-S', '--sourcedir', action='store', dest='sourcedir',
-                        default=SOURCEDIR,  metavar='PATH',
-                        help='Location of source data')
-    parser.add_argument('-O', '--outdir', action='store', dest='outdir',
-                        default=OUTDIR,  metavar='PATH',
-                        help='Location of processed data')                        
-    parser.add_argument('-V', '--verbosity', action='store', dest='verbosity',
-                        default=VERBOSITY.NORMAL,  metavar='N', type=int,
-                        help='Verbosity level (0:quite, 1:normal, 2:verbose, 3:debug')  
+# Round up to next size
+def roundup(x, size):
+    return ((x+size-1) // size) * size
 
 
-    cmdparser = parser.add_subparsers(title='Commands', description=None,
-                                      help="-h, --help Additional help",)
-    
-    cmd = cmdparser.add_parser('save_coords', help='Build bands and targets.')
-    cmd.set_defaults(funcname='save_coords')
+# Round down to previous size
+def rounddown(x, size):
+    return roundup(x-size+1, size)
 
-    cmd = cmdparser.add_parser('save_sea_lions', help='Save collection of sealion images')
-    cmd.set_defaults(funcname='save_sea_lions')
-    
 
-    opts = vars(parser.parse_args())
-
-    sourcedir = opts.pop('sourcedir')
-    outdir = opts.pop('outdir')
-    verbosity = opts.pop('verbosity')
-    funcname = opts.pop('funcname')
-
-        
-    sld = SeaLionData(sourcedir=sourcedir, outdir=outdir,verbosity=verbosity)
-    func = getattr(sld, funcname)
-    func(**opts)
-    
-       
-       
 if __name__ == "__main__":
-    main()
-    
+    # Build coordinates
+    sld = SeaLionData()
+    sld.save_coords()
 
+    # Error analysis
+    sld.verbosity = VERBOSITY.VERBOSE
+    tid_counts = sld.count_coords(sld.tid_coords)
+    rmse, frac = sld.rmse(tid_counts)
+
+    print()
+    print('RMSE: {}'.format(rmse) )
+    print('Error frac: {}'.format(frac))
+   
+    
+    
