@@ -45,7 +45,7 @@ from shapely.geometry import Polygon
 # By default, SeaLionData expects source data to be located in ../input, and saves processed data to ./outdir
 #
 #
-# With contributions from @bitsofbits, @authman, @mfab ...
+# With contributions from @bitsofbits, @authman, @mfab, @depthfirstsearch ...
 #
 
 
@@ -103,7 +103,7 @@ class SeaLionData(object):
         self.cls_colors = (
             (243,8,5),          # red
             (244,8,242),        # magenta
-            (87,46,10),         # brown 
+            (87,46,10),         # brown (Brown sea lions on brown rocks marked with brown dots!)
             (25,56,176),        # blue
             (38,174,21),        # green
             )
@@ -127,25 +127,157 @@ class SeaLionData(object):
             'chunk'      : os.path.join(outdir, 'chunk_{tid}_{cls}_{row}_{col}_{size}.png'),
             }
         
-
         self.bad_train_ids = (
             # From MismatchedTrainImages.txt
-            3, 
-            # 7,    # TrainDotted rotated 180 degrees. Apply custom fix in load_dotted_image()
-            9, 21, 30, 34, 71, 81, 89, 97, 151, 184, 215, 234, 242, 
-            268, 290, 311, 331, 344, 380, 384, 406, 421, 469, 475, 490, 499, 
-            507, 530, 531, 605, 607, 614, 621, 638, 644, 687, 712, 721, 767, 
-            779, 781, 794, 800, 811, 839, 840, 869, 882, 901, 903, 905, 909, 
-            913, 927, 946,
-            # Additional
-            857,    # Many sea lions, but no dots on sea lions
-            )
+			3, 		# Region mismatch
+			# 7,    # TrainDotted rotated 180 degrees. Hot patch in load_dotted_image()
+			9, 		# Region mismatch
+			21, 	# Region mismatch
+			30, 	# Exposure mismatch -- not fixable
+			34, 	# Exposure mismatch -- not fixable
+			71, 	# Region mismatch
+			81, 	# Region mismatch
+			89, 	# Region mismatch
+			97, 	# Region mismatch 
+			151, 	# Region mismatch
+			184, 	# Exposure mismatch -- almost fixable
+			# 215, 	# TrainDotted rotated 180 degrees. Hot patch in load_dotted_image()
+			234, 	# Region mismatch
+			242, 	# Region mismatch
+			268, 	# Region mismatch
+			290, 	# Region mismatch
+			311,  	# Region mismatch
+			# 331, 	# TrainDotted rotated 180 degrees. Hot patch in load_dotted_image()
+			# 344, 	# TrainDotted rotated 180 degrees. Hot patch in load_dotted_image()
+			380, 	# Exposure mismatch -- not fixable
+			384, 	# Region mismatch
+			# 406, 	# Exposure mismatch -- fixed by find_coords()
+			# 421, 	# TrainDotted rotated 180 degrees. Hot patch in load_dotted_image()
+			# 469, 	# Exposure mismatch -- fixed by find_coords()
+			# 475, 	# Exposure mismatch -- fixed by find_coords()
+			490, 	# Region mismatch
+			499, 	# Region mismatch
+			507, 	# Region mismatch
+			# 530,	# TrainDotted rotated. Hot patch in load_dotted_image()
+			531, 	# Exposure mismatch -- not fixable
+			# 605,  # In MismatchedTrainImages, but appears to be O.K.
+			# 607, 	# Missing annotations on 2 adult males, added to missing_coords
+			614, 	# Exposure mismatch -- not fixable
+			621, 	# Exposure mismatch -- not fixable
+			# 638, 	# TrainDotted rotated. Hot patch in load_dotted_image()
+			# 644,  # Exposure mismatch, but not enough to cause problems
+			687, 	# Region mismatch
+			712, 	# Exposure mismatch -- not fixable
+			721, 	# Region mismatch
+			767, 	# Region mismatch
+			779, 	# Region mismatch
+			# 781, 	# Exposure mismatch -- fixed by find_coords()
+			# 794,  # Exposure mismatch -- fixed by find_coords() 
+			800, 	# Region mismatch
+			811, 	# Region mismatch
+			839, 	# Region mismatch
+			840, 	# Exposure mismatch -- not fixable
+			869, 	# Region mismatch
+			# 882,	# Exposure mismatch -- fixed by find_coords() 
+			# 901,	# Train image has (different) mask already, but not actually a problem
+			903,	# Region mismatch 				
+			905,	# Region mismatch 
+			909,	# Region mismatch 
+			913,	# Exposure mismatch -- not fixable
+			927, 	# Region mismatch 
+			946,	# Exposure mismatch -- not fixable
+
+			# Additional anomalies   
+            129,    # Raft of marked juveniles in water (middle top). But another 
+                    # large group bottom middle are not marked
+			200, 	# lots of pups marked as adult males
+            235,    # None of the 35 adult males have been labelled
+			857,    # Missing annotations on all sea lions (Kudos: @depthfirstsearch)
+			941,	# 5 adult males not marked	
+		)
             
+        # A few TrainDotted images are rotated relative to Train.
+        # Hot patch in load_dotted_image()
+        # Number of 90 degree rotations to apply. 
+        self.dotted_rotate = {7:2, 215:2, 331:2, 344:2, 421:2, 530:1, 638:1}
+           
+        self.bad_coords = (
+            SeaLionCoord(83, 2, 46, 4423),      # Empty sea?
+            SeaLionCoord(259, 0, 1358, 2228),   # Empty sea (kudos: @authman) 
+            SeaLionCoord(275, 0, 272, 4701),    # Empty sea (kudos: @authman) 
+            SeaLionCoord(292, 2, 4, 248),       # Rock
+            SeaLionCoord(303, 3, 1533, 3337),   # Rock
+            SeaLionCoord(741, 0, 1418, 3258),   # Empty sea (kudos: @authman) 
+            SeaLionCoord(741, 0, 2466, 3700),   # Empty sea (kudos: @authman) 
+            SeaLionCoord(921, 3, 2307, 1418),   # Empty sea
+            SeaLionCoord(921, 3, 2351, 1398),   # Empty sea
+        )
+        
+        self.missing_coords = {
+            607: ( 
+                SeaLionCoord(607, 0, 1160, 2459),
+                SeaLionCoord(607, 0, 1245, 2836),
+            ),
+            148: (
+                SeaLionCoord(148, 1, 1390, 4525),
+            ),
+            899: (
+                SeaLionCoord(899, 2, 550, 2114),    # adult_female or juvenile?
+            ),
+        }
+
+        # Corrections to train.csv counts 
+        self.better_counts = {
+            2 : [2, 0, 37, 19, 0],      # (kudos: @authman)
+            11 : [3, 5, 36, 13, 0],     # (kudos: @authman)
+            18 : [2, 3, 0, 0, 0], 
+            36 : [8, 17, 0, 0, 0],
+            40 : [2, 2, 62, 7, 0],      # (kudos: @authman)
+            66 : [8, 5, 23, 17, 2],     # train.csv reports no sea lions, but lots annotated
+            148: [0, 3, 0, 5, 0],
+            221: [6, 1, 26, 9, 2],      # (kudos: @authman)
+            292: [5, 5, 49, 42, 1], 
+            299: [27, 9, 209, 32, 55],  # (kudos: @authman)
+            312: [1, 1, 21, 14, 0],     # (kudos: @authman)
+            335: [6, 36, 18, 12, 0],    # (kudos: @authman)
+            426: [2, 6, 11, 42, 5],     # (kudos: @authman)
+            479: [5, 4, 0, 0, 0],       # (kudos: @authman)
+            492: [2, 1, 9, 21, 1],      # (kudos: @authman)
+            510: [5, 1, 0, 0, 0],       # (kudos: @authman)
+            529: [5, 2, 15, 12, 0],     # (kudos: @authman)
+            538: [10, 2, 162, 9, 115],  # (kudos: @authman)
+            577: [3, 1, 116, 97, 0],    # (kudos: @authman)
+            593: [1, 2, 32, 5, 0],      # (kudos: @authman)       
+            607: [2, 3, 14, 3, 0],
+            698: [1, 0, 0, 14, 0],      # (kudos: @authman)
+            706: [2, 4, 39, 18, 0],     # (kudos: @authman)
+            707: [4, 21, 1, 7, 0],      # (kudos: @authman)
+            776: [8, 2, 25, 2, 29],     # (kudos: @authman)
+            899: [2, 2, 4, 3, 0],       # (kudos: @authman)
+        }
+        
+        # train_ids that arn't in bad_train_ids but still have some discrepancy 
+        # with train.csv counts
+        self.anomalous_train_ids = (
+            6, 13, 15, 38, 47, 52, 62, 63, 67, 73, 77, 78, 80, 83, 87, 91, 93, 99, 105, 108, 110, 
+            122, 127, 134, 136, 146, 155, 170, 174, 175, 177, 178, 179, 181, 186, 187, 207, 211, 
+            214, 216, 218, 240, 252, 256, 258, 265, 271, 277, 292, 293, 297, 298, 309, 310, 323, 
+            325, 328, 330, 338, 342, 351, 359, 361, 362, 365, 368, 369, 375, 382, 383, 386, 388, 
+            394, 395, 398, 405, 409, 410, 412, 416, 418, 431, 433, 437, 441, 460, 462, 465, 467, 
+            473, 475, 476, 482, 483, 487, 491, 495, 498, 500, 505, 509, 516, 518, 523, 524, 539, 
+            543, 544, 552, 553, 554, 555, 568, 571, 574, 578, 585, 587, 593, 595, 598, 604, 606, 
+            619, 629, 632, 633, 643, 645, 655, 658, 662, 664, 668, 675, 676, 679, 686, 699, 700, 
+            703, 710, 724, 729, 732, 739, 744, 745, 748, 750, 751, 754, 759, 761, 763, 764, 781, 
+            788, 790, 795, 798, 803, 804, 805, 806, 813, 814, 816, 822, 823, 827, 837, 845, 858, 
+            865, 871, 873, 878, 881, 882, 889, 900, 906, 910, 912, 914, 917, 918, 920, 921, 924, 
+            925, 926, 933, 934, 937)
+        
         # caches
         self._tid_counts = None
         self._tid_coords = None
 
-        
+            
+    
     @property
     def trainshort1_ids(self):
         tids = range(0, 11)
@@ -173,6 +305,7 @@ class SeaLionData(object):
         tids.sort()
         return tids
         
+        
     @property 
     def test_ids(self):
         return range(0, self.test_nb)
@@ -195,13 +328,23 @@ class SeaLionData(object):
                 for line in f:
                     counts = list(map(int, line.split(',')))
                     tid_counts[counts[0]] = counts[1:]
+            # Apply corrections
+            for tid, counts in self.better_counts.items() :
+                tid_counts[tid] = counts
             self._tid_counts = tid_counts
         return self._tid_counts
 
 
     def count_coords(self, tid_coords) :
-        """Take a map from ids to coordinates, 
-        and return a map from ids to list of class counts"""
+        """Return a map from ids to list of class counts.
+        
+        Args: 
+            tid_coords: A map from ids to coordinates.
+        
+        Returns:
+            A list of integer sea lion class counts 
+        
+        """
         tid_counts = OrderedDict()
         for tid, coords in tid_coords.items(): 
             counts = [0]*self.cls_nb
@@ -239,8 +382,12 @@ class SeaLionData(object):
     def load_train_image(self, train_id, scale=1, border=0, mask=False):
         """Return image as numpy array.
          
-        border -- add a black border of this width around image
-        mask -- If true copy masks from corresponding dotted image
+        Args: 
+            border (int): Add a black border of this width around image
+            mask (bool): If true copy masks from corresponding dotted image
+        
+        Returns:
+            uint8 numpy array
         """
         img = self._load_image('train', train_id, scale, border)
         if mask :
@@ -256,9 +403,10 @@ class SeaLionData(object):
     def load_dotted_image(self, train_id, scale=1, border=0):
         img = self._load_image('dotted', train_id, scale, border)
         
-        if train_id == 7 :
-            # dotted image is rotated relative to train. Apply custom fix. (kudos: @authman)
-            img = np.rot90(img, 2, (0,1) )
+        # When dotted image is rotated relative to train, apply hot patch. (kudos: @authman)
+        if train_id in self.dotted_rotate :
+            rot = self.dotted_rotate[train_id]
+            img = np.rot90(img, rot, (0,1) )
             
         return img
  
@@ -286,24 +434,37 @@ class SeaLionData(object):
     
 
     def find_coords(self, train_id):
-        """Extract coordinates of dotted sealions and return list of SeaLionCoord objects"""
+        """Extract coordinates of dotted sealions from TrainDotted image
+        
+        Args:
+            train_id:
+        
+        Returns:
+             list of SeaLionCoord objects
+        """
         
         # Empirical constants
         MIN_DIFFERENCE = 16
-        MIN_AREA = 9
-        MAX_AREA = 100
+        MIN_AREA = 7
+        MAX_AREA = 50   #Reduced to 50 from 100 to catch a few weird stray red lines, e.g. 523, 526
         MAX_AVG_DIFF = 50
         MAX_COLOR_DIFF = 32
+        MAX_MASK = 8
        
         src_img = np.asarray(self.load_train_image(train_id, mask=True), dtype = np.float)
         dot_img = np.asarray(self.load_dotted_image(train_id), dtype = np.float)
 
-        img_diff = np.abs(src_img-dot_img)
-        
-        #print(src_img.shape, dot_img.shape)
-        #Image.fromarray( src_img.astype(np.uint8) ).save('src_img.png')
-        #Image.fromarray( dot_img.astype(np.uint8) ).save('dot_img.png')
-        #sys.exit()
+        # Sometimes the exposure of the Train and TrainDotted images is different. 
+        # If mismatch is not too bad we can sometimes fix this problem.
+        # (see also comments on bad_train_ids)
+        ratio = src_img.sum() / dot_img.sum()
+        MISMATCHED_EXPOSURE = 1.05
+        if ratio > MISMATCHED_EXPOSURE or ratio < 1/MISMATCHED_EXPOSURE:
+            self._progress(' (Adjusting exposure: {} {})'.format(train_id, ratio), verbosity=VERBOSITY.VERBOSE)
+            # We adjust the source image so not to mess up dot colors
+            src_img /= ratio
+            
+        img_diff = np.abs(src_img - dot_img)
         
         # Detect bad data. If train and dotted images are very different then somethings wrong.
         avg_diff = img_diff.sum() / (img_diff.shape[0] * img_diff.shape[1])
@@ -321,7 +482,8 @@ class SeaLionData(object):
         for cls, color in enumerate(self.cls_colors):
             # color search backported from @bitsofbits.
             # Note that there are large red boxes and arrows in some training images (e.g. 912)
-            # The red of these lines (250,0,10) is sufficiently different from dot red that the lines get filtered out.
+            # The red of these lines (250,0,10) is sufficiently different from dot red that the
+            # lines mostly get filtered out.
             color_array = np.array(color)[None, None, :]
             has_color = np.sqrt(np.sum(np.square(dot_img * (img_diff > 0)[:,:,None] - color_array), axis=-1)) < MAX_COLOR_DIFF 
             contours = skimage.measure.find_contours(has_color.astype(float), 0.5)
@@ -339,8 +501,30 @@ class SeaLionData(object):
                     row, col = p.centroid.coords[0] # DANGER : skimage and cv2 coordinates transposed
                     row = int(round(row))
                     col = int(round(col))
+                    
+                    if cls == self.cls_idx.adult_males :
+                        # Sometimes there are ends of red lines poking out from under the black masks
+                        # that get mistaken for adult male red dots.
+                        dot_region = src_img[row-4: row+5, col-4:col+5]
+                        zero_count = dot_region.size - np.count_nonzero(dot_region)  
+                        
+                        if zero_count>MAX_MASK:
+                            self._progress(' (Rejecting {} 0 {} {} : {})'.format(train_id, row, col, zero_count),
+                                verbosity=VERBOSITY.DEBUG)
+                            continue
+
+                    # Remove known bad coordinates
+                    if any([c.tid==train_id and c.cls==cls 
+                            and abs(c.row-row)<2 and abs(c.col-col)<2 for c in self.bad_coords]) :
+                        self._progress(' (Removing bad coord: {} {} {} {})'.format(train_id, cls, row, col),
+                            verbosity=VERBOSITY.DEBUG)
+                        continue
+
                     sealions.append( SeaLionCoord(train_id, cls, row, col) )
-                
+        
+        if train_id in self.missing_coords :
+            sealions.extend(self.missing_coords[train_id])  
+        
         if self.verbosity >= VERBOSITY.VERBOSE :
             counts = [0,0,0,0,0]
             for c in sealions :
@@ -398,29 +582,31 @@ class SeaLionData(object):
         return self._tid_coords     
 
             
-    def save_sea_lions(self, coords=None, size=TILE_SIZE, dotted=False):
+    def save_sea_lions(self, train_id, coords, size=TILE_SIZE, dotted=False):
         """Save image chunks of given size centered on sea lion coordinates.
         If no coordinates given, then load training set coordinates.
+        
+        Args: 
+            train_id: 
+            coords: list of SeaLionCoords
+            size: (int) The height and width of each chunk
+            dotted: (bool) if true extract chunks from TrainDotted
         """
         self._progress('Saving image chunks...')
         self._progress('\n', verbosity=VERBOSITY.VERBOSE)
         
-        if coords is None : coords = self.load_coords()
-        
-        last_tid = None
-        
+        if dotted :
+            img = self.load_dotted_image(train_id, border=size//2)
+        else :
+            img = self.load_train_image(train_id, border=size//2, mask=True)
+            
         for tid, cls, row, col in coords :
-            if tid != last_tid:
-                if dotted :
-                    img = self.load_dotted_image(tid, border=size//2)
-                else :
-                    img = self.load_train_image(tid, border=size//2, mask=True)
-                last_tid = tid
-
+            assert(tid==train_id)
             fn = self.path('chunk', size=size, tid=tid, cls=cls, row=row, col=col)
             self._progress(' Saving '+fn, end='\n', verbosity=VERBOSITY.VERBOSE)
             Image.fromarray( img[row:row+size, col:col+size, :]).save(fn)
             self._progress()
+            
         self._progress('done')
         
             
