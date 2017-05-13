@@ -4,6 +4,8 @@ import unittest
 
 from sealiondata import *
 
+# To run single test:        
+# python test_sealiondata.py TestSeaLionData.test_path
 
 
 class TestUtils(unittest.TestCase):
@@ -14,6 +16,36 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(100, rounddown(100,10) )
 
 
+    def test_SeaLionCoords(self):
+        c = SeaLionCoord(83, 2, 46, 4423)
+        self.assertEqual(c.tid, 83)
+        self.assertEqual(c.cls, 2)
+        self.assertEqual(c.row, 46)
+        self.assertEqual(c.col, 4423)
+        
+        self.assertTrue( type(c) is SeaLionCoord )
+
+
+    def test_to_tid_coords(self):
+        coords = (
+            SeaLionCoord(83, 2, 46, 4423),      
+            SeaLionCoord(100, 3, 1170, 3111),   
+            SeaLionCoord(100, 3, 1041, 4093),  
+        )
+        
+        tid_coords = to_tid_coords(coords)
+        self.assertEqual(len(tid_coords[100]) , 2)
+
+        coords = (
+            (83, 2, 46, 4423),      
+            (100, 3, 1170, 3111),   
+            (100, 3, 1041, 4093),  
+        )
+        
+        tid_coords = to_tid_coords(coords)
+        self.assertEqual(tid_coords[83][0].tid , 83)
+        
+        
 class TestSeaLionData(unittest.TestCase):
     def setUp(self):
         self.sld = SeaLionData()
@@ -77,8 +109,9 @@ class TestSeaLionData(unittest.TestCase):
         
         
     def test_load_test_image(self):
-        # TODO
-        pass
+        img = self.sld.load_test_image(103)
+        self.assertEqual((3840, 5760, 3), img.shape)
+
         
     def test_find_coords(self):
         coords = self.sld.find_coords(66)
